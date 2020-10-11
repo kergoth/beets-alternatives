@@ -22,7 +22,7 @@ from typing import Callable, Iterable, Iterator, Optional, Sequence, Set, Tuple,
 import beets
 import confuse
 from beets import art, util
-from beets.library import Item, Library, parse_query_string
+from beets.library import Album, Item, Library, parse_query_string
 from beets.plugins import BeetsPlugin
 from beets.ui import Subcommand, UserError, decargs, get_path_formats, input_yn, print_
 from beets.util import FilesystemError, bytestring_path, displayable_path, syspath
@@ -172,7 +172,8 @@ class Action(Enum):
     REMOVE = 2
     WRITE = 3
     MOVE = 4
-    SYNC_ART = 5
+    EMBED_ART = 5
+    COPY_ART = 6
 
 
 class External:
@@ -201,6 +202,10 @@ class External:
                 'embed',
                 self.convert_plugin.config["embed"].get(bool)
                 )  # type: ignore
+        self.copy_album_art = config.get(dict).get(
+                'copy_album_art',
+                self.convert_plugin.config["copy_album_art"].get(bool)
+                )
 
         if "directory" in config:
             dir = config["directory"].as_str()
@@ -235,7 +240,7 @@ class External:
             and os.path.isfile(syspath(album.artpath))
             and (item_mtime_alt < os.path.getmtime(syspath(album.artpath)))
         ):
-            actions.append(Action.SYNC_ART)
+            actions.append(Action.EMBED_ART)
 
         return actions
 
@@ -265,6 +270,24 @@ class External:
                 yield (item, self._matched_item_action(item))
             elif self._get_stored_path(item):
                 yield (item, [Action.REMOVE])
+
+    def matched_album_action(self, album):
+        dest_dir = self.album_destination(album)
+        if not dest_dir:
+            return (album, [])
+        if (self.copy_album_art and
+                album.artpath and os.path.isfile(syspath(album.artpath))):
+            path = album.artpath
+            dest = album.art_destination(path, dest_dir)
+            if (not os.path.isfile(dest) or
+                    os.path.getmtime(path) > os.path.getmtime(dest)):
+                return (album, [self.COPY_ART])
+        return (album, [])
+
+    def albums_actions(self):
+        for album in self.lib.albums():
+            if self.query.match(album):
+                yield self.matched_album_action(album)
 
     def ask_create(self, create: Optional[bool] = None) -> bool:
         if not self.removable:
@@ -307,10 +330,10 @@ class External:
                     assert path is not None  # action guarantees that `path` is not none
                     print_(f"*{displayable_path(path)}")
                     item.write(path=path)
-                elif action == Action.SYNC_ART:
+                elif action == Action.EMBED_ART:
                     assert path is not None  # action guarantees that `path` is not none
                     print_(f"~{displayable_path(path)}")
-                    self._sync_art(item, path)
+                    self._embed_art(item, path)
                 elif action == Action.ADD:
                     print_(f"+{displayable_path(dest)}")
                     converter.run(item)
@@ -325,11 +348,28 @@ class External:
             item.store()
         converter.shutdown()
 
+        for (album, actions) in self.albums_actions():
+            for action in actions:
+                dest_dir = self.album_destination(album)
+                if action == Action.COPY_ART:
+                    path = album.artpath
+                    dest = album.art_destination(path, dest_dir)
+                    util.copy(path, dest, replace=True)
+                    print_(u'$~{0}'.format(displayable_path(dest)))
+
     def destination(self, item: Item) -> bytes:
         """Returns the path for `item` in the external collection."""
         path = item.destination(basedir=self.directory, path_formats=self.path_formats)
         assert isinstance(path, bytes)
         return path
+
+    def album_destination(self, album: Album) -> Optional[bytes]:
+        items = album.items()
+        if len(items) > 0:
+            head, tail = os.path.split(self.destination(items[0]))
+            return head
+        else:
+            return None
 
     def _set_stored_path(self, item: Item, path: bytes):
         item[self.path_key] = str(path, "utf8")
@@ -366,8 +406,8 @@ class External:
 
         return Worker(_convert, self.max_workers)
 
-    def _sync_art(self, item: Item, path: bytes):
-        """Embed artwork in the file at `path`."""
+    def _embed_art(self, item: Item, path: bytes):
+        """Embed artwork in the destination file."""
         album = item.get_album()
         if album and album.artpath and os.path.isfile(syspath(album.artpath)):
             self._log.debug(
@@ -409,7 +449,7 @@ class ExternalConvert(External):
                 self._log.debug(f"copying {displayable_path(dest)}")
                 util.copy(item.path, dest, replace=True)
             if self._embed:
-                self._sync_art(item, dest)
+                self._embed_art(item, dest)
             return item, dest
 
         return Worker(_convert, self.max_workers)
@@ -503,7 +543,7 @@ class SymlinkView(External):
         util.link(link, dest)
 
     @override
-    def _sync_art(self, item: Item, path: bytes):
+    def _embed_art(self, item: Item, path: bytes):
         pass
 
 

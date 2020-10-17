@@ -30,6 +30,8 @@ from beets.util import syspath, displayable_path, cpu_count, bytestring_path, \
 
 from beetsplug import convert
 
+import subprocess
+
 
 def _remove(path, soft=True):
     """Remove the file. If `soft`, then no error will be raised if the
@@ -184,6 +186,10 @@ class External(object):
                 'copy_album_art',
                 self.convert_plugin.config["copy_album_art"].get(bool)
                 )
+        self.copy_album_art_pp = config.get(dict).get(
+                'copy_album_art_pp',
+                None
+                )
 
         if 'directory' in config:
             dir = config['directory'].as_str()
@@ -321,7 +327,9 @@ class External(object):
                     path = album.artpath
                     dest = album.art_destination(path, dest_dir)
                     util.copy(path, dest, replace=True)
-                    print_(u'$~{0}'.format(displayable_path(dest)))
+                    if self.copy_album_art_pp:
+                        subprocess.call(self.copy_album_art_pp + [dest])
+                    print_(u'~{0}'.format(displayable_path(dest)))
 
     def destination(self, item):
         return item.destination(basedir=self.directory,

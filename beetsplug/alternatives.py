@@ -184,6 +184,7 @@ class External:
         self.lib = lib
         self.path_key = f"alt.{name}"
         self.max_workers = int(str(beets.config["convert"]["threads"]))
+        self.convert_plugin = convert.ConvertPlugin()
         self.parse_config(config)
 
     def parse_config(self, config: confuse.ConfigView):
@@ -196,6 +197,10 @@ class External:
         self.query, _ = parse_query_string(query, Item)
 
         self.removable = config.get(dict).get("removable", True)  # type: ignore
+        self._embed = config.get(dict).get(
+                'embed',
+                self.convert_plugin.config["embed"].get(bool)
+                )  # type: ignore
 
         if "directory" in config:
             dir = config["directory"].as_str()
@@ -221,10 +226,11 @@ class External:
         item_mtime_alt = os.path.getmtime(syspath(path))
         if item_mtime_alt < os.path.getmtime(syspath(item.path)):
             actions.append(Action.WRITE)
-        album = item.get_album()
 
+        album = item.get_album()
         if (
             album
+            and self._embed
             and album.artpath
             and os.path.isfile(syspath(album.artpath))
             and (item_mtime_alt < os.path.getmtime(syspath(album.artpath)))
@@ -382,7 +388,6 @@ class ExternalConvert(External):
         super().__init__(log, name, lib, config)
         convert_plugin = convert.ConvertPlugin()
         self._encode = convert_plugin.encode
-        self._embed = convert_plugin.config["embed"].get(bool)
         formats = [f.lower() for f in formats]
         self.formats = [convert.ALIASES.get(f, f) for f in formats]
         self.convert_cmd, self.ext = convert.get_format(self.formats[0])

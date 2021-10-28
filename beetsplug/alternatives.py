@@ -16,6 +16,7 @@ import os.path
 import threading
 import argparse
 from concurrent import futures
+import re
 import six
 import traceback
 
@@ -175,6 +176,24 @@ class External(object):
 
         self.removable = config.get(dict).get('removable', True)
 
+        if 'replace' in config:
+            try:
+                self.replacements = get_replacements(config['replace'])
+            except UserError as exc:
+                raise UserError(f'Error in alternatives.{self.name}.replace: {exc}')
+        elif 'replace_extra' in config:
+            if 'replace' in beets.config:
+                self.replacements = get_replacements(beets.config['replace'])
+            else:
+                self.replacements = []
+
+            try:
+                self.replacements.extend(get_replacements(config['replace_extra']))
+            except UserError as exc:
+                raise UserError(f'Error in alternatives.{self.name}.replace: {exc}')
+        else:
+            self.replacements = None
+
         if 'directory' in config:
             dir = config['directory'].as_str()
         else:
@@ -288,7 +307,8 @@ class External(object):
 
     def destination(self, item):
         return item.destination(basedir=self.directory,
-                                path_formats=self.path_formats)
+                                path_formats=self.path_formats,
+                                replacements=self.replacements)
 
     def set_path(self, item, path):
         item[self.path_key] = six.text_type(path, 'utf8')
@@ -454,3 +474,21 @@ class Worker(futures.ThreadPoolExecutor):
         for f in futures.as_completed(self._tasks):
             self._tasks.remove(f)
             yield f.result()
+
+
+# Copied with tweak from beets itself
+def get_replacements(replace_config):
+    """Confuse validation function that reads regex/string pairs.
+    """
+    replacements = []
+    for pattern, repl in replace_config.get(dict).items():
+        repl = repl or ''
+        try:
+            replacements.append((re.compile(pattern), repl))
+        except re.error:
+            raise UserError(
+                'malformed regular expression in replace: {}'.format(
+                    pattern
+                )
+            )
+    return replacements

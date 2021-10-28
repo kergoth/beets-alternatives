@@ -13,11 +13,12 @@
 import argparse
 import logging
 import os.path
+import re
 import threading
 import traceback
 from concurrent import futures
 from enum import Enum
-from typing import Callable, Iterable, Iterator, Optional, Sequence, Set, Tuple, cast
+from typing import AnyStr, Callable, Iterable, Iterator, List, Optional, Pattern, Sequence, Set, Tuple, cast
 
 import beets
 import confuse
@@ -197,6 +198,24 @@ class External:
 
         self.removable = config.get(dict).get("removable", True)  # type: ignore
 
+        if 'replace' in config:
+            try:
+                self.replacements = get_replacements(config['replace'])
+            except UserError as exc:
+                raise UserError(f'Error in alternatives.{self.name}.replace: {exc}')
+        elif 'replace_extra' in config:
+            if 'replace' in beets.config:
+                self.replacements = get_replacements(beets.config['replace'])
+            else:
+                self.replacements = []
+
+            try:
+                self.replacements.extend(get_replacements(config['replace_extra']))
+            except UserError as exc:
+                raise UserError(f'Error in alternatives.{self.name}.replace: {exc}')
+        else:
+            self.replacements = None
+
         if "directory" in config:
             dir = config["directory"].as_str()
             assert isinstance(dir, str)
@@ -321,7 +340,9 @@ class External:
 
     def destination(self, item: Item) -> bytes:
         """Returns the path for `item` in the external collection."""
-        path = item.destination(basedir=self.directory, path_formats=self.path_formats)
+        path = item.destination(basedir=self.directory,
+                                path_formats=self.path_formats,
+                                replacements=self.replacements)
         assert isinstance(path, bytes)
         return path
 
@@ -519,3 +540,18 @@ class Worker(futures.ThreadPoolExecutor):
         for f in futures.as_completed(self._tasks):
             self._tasks.remove(f)
             yield f.result()
+
+
+# Copied with tweak from beets itself
+def get_replacements(replace_config: confuse.ConfigView) -> List[Tuple[Pattern[str], str]]:
+    """Confuse validation function that reads regex/string pairs."""
+    replacements = []
+    for pattern, repl in replace_config.get(dict).items():  # type: ignore
+        repl = repl or ""
+        try:
+            replacements.append((re.compile(pattern), repl))
+        except re.error as e:
+            raise UserError(
+                f"malformed regular expression in replace: {pattern}"
+            ) from e
+    return replacements

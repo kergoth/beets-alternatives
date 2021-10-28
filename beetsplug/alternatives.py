@@ -11,18 +11,20 @@
 # all copies or substantial portions of the Software.
 
 
+import collections
 import os.path
 import threading
 from argparse import ArgumentParser
 from concurrent import futures
+import re
 import six
 
 import beets
 from beets import util, art
 from beets.plugins import BeetsPlugin
-from beets.ui import Subcommand, get_path_formats, input_yn, UserError, print_
+from beets.ui import PF_KEY_QUERIES, Subcommand, input_yn, UserError, print_
 from beets.library import parse_query_string, Item
-from beets.util import syspath, displayable_path, cpu_count, bytestring_path
+from beets.util import functemplate, syspath, displayable_path, cpu_count, bytestring_path
 
 from beetsplug import convert
 
@@ -102,11 +104,37 @@ class External(object):
             path_config = config['paths']
         else:
             path_config = beets.config['paths']
-        self.path_formats = get_path_formats(path_config)
+
         query = config['query'].as_str()
         self.query, _ = parse_query_string(query, Item)
 
         self.removable = config.get(dict).get('removable', True)
+
+        if 'rewrite' in config:
+            self.rewrite = rewrite_rules(config['rewrite'])
+            self.path_formats = get_path_formats(path_config,
+                                        template=lambda f: RewriteTemplate(f, self.rewrite))
+        else:
+            self.rewrite = None
+            self.path_formats = get_path_formats(path_config)
+
+        if 'replace' in config:
+            try:
+                self.replacements = get_replacements(config['replace'])
+            except UserError as exc:
+                raise UserError(f'Error in alternatives.{self.name}.replace: {exc}')
+        elif 'replace_extra' in config:
+            if 'replace' in beets.config:
+                self.replacements = get_replacements(beets.config['replace'])
+            else:
+                self.replacements = []
+
+            try:
+                self.replacements.extend(get_replacements(config['replace_extra']))
+            except UserError as exc:
+                raise UserError(f'Error in alternatives.{self.name}.replace: {exc}')
+        else:
+            self.replacements = None
 
         if 'directory' in config:
             dir = config['directory'].as_str()
@@ -210,7 +238,8 @@ class External(object):
 
     def destination(self, item):
         return item.destination(basedir=self.directory,
-                                path_formats=self.path_formats)
+                                path_formats=self.path_formats,
+                                replacements=self.replacements)
 
     def set_path(self, item, path):
         item[self.path_key] = six.text_type(path, 'utf8')
@@ -345,3 +374,96 @@ class Worker(futures.ThreadPoolExecutor):
         for f in futures.as_completed(self._tasks):
             self._tasks.remove(f)
             yield f.result()
+
+
+def get_path_formats(subview=None, template=None):
+    """Get the configuration's path formats.
+    """
+    if template is None:
+        template = functemplate.template
+    path_formats = []
+    for query, view in subview.items():
+        query = PF_KEY_QUERIES.get(query, query)  # Expand common queries.
+        path_formats.append((query, template(view.as_str())))
+    return path_formats
+
+
+class RewriteTemplate(functemplate.Template):
+    """Template which applies rewrite rules."""
+    def __init__(self, template, rewrite_rules=None):
+        super().__init__(template)
+        self.rewrite_rules = rewrite_rules
+
+    def substitute(self, values=None, functions=None):
+        if self.rewrite_rules is not None:
+            oldvalues = {}
+            try:
+                for field, fieldfunc in self.rewrite_rules.items():
+                    value = values[field]
+                    if value is not None:
+                        newvalue = fieldfunc(values.item)
+                        if newvalue != value:
+                            oldvalues[field] = value
+                            values.item[field] = newvalue
+                return super().substitute(values=values, functions=functions)
+            finally:
+                if oldvalues:
+                    values.item.update(oldvalues)
+
+        return super().substitute(values=values, functions=functions)
+
+
+def rewrite_rules(config):
+    rulesfuncs = {}
+    rules = collections.defaultdict(list)
+    for key, view in config.items():
+        value = view.as_str()
+        try:
+            fieldname, pattern = key.split(None, 1)
+        except ValueError:
+            raise UserError("invalid rewrite specification")
+        pattern = re.compile(pattern.lower())
+        rules[fieldname].append((pattern, value))
+        if fieldname == 'artist':
+            # Special case for the artist field: apply the same
+            # rewrite for "albumartist" as well.
+            rules['albumartist'].append((pattern, value))
+
+    # Replace each template field with the new rewriter function.
+    for fieldname, fieldrules in rules.items():
+        rulesfuncs[fieldname] = rewriter(fieldname, fieldrules)
+    return rulesfuncs
+
+
+def rewriter(field, rules):
+    """Create a template field function that rewrites the given field
+    with the given rewriting rules. ``rules`` must be a list of
+    (pattern, replacement) pairs.
+    """
+    def fieldfunc(item):
+        value = item._values_fixed[field]
+        for pattern, replacement in rules:
+            if pattern.match(value.lower()):
+                # Rewrite activated.
+                return replacement
+        # Not activated; return original value.
+        return value
+    return fieldfunc
+
+
+# Copied with tweak from beets itself
+def get_replacements(replace_config):
+    """Confuse validation function that reads regex/string pairs.
+    """
+    replacements = []
+    for pattern, repl in replace_config.get(dict).items():
+        repl = repl or ''
+        try:
+            replacements.append((re.compile(pattern), repl))
+        except re.error:
+            raise UserError(
+                'malformed regular expression in replace: {}'.format(
+                    pattern
+                )
+            )
+    return replacements

@@ -61,7 +61,10 @@ class AlternativesPlugin(BeetsPlugin):
         except KeyError as e:
             raise UserError(u"Alternative collection '{0}' not found."
                             .format(e.args[0]))
+
+        beets.plugins.send('alternative_before_update', alternative=alt, options=options)
         alt.update(create=options.create, query=options.query)
+        beets.plugins.send('alternative_updated', alternative=alt, options=options)
 
     def list_tracks(self, lib, options):
         if options.format is not None:

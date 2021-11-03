@@ -43,9 +43,9 @@ class AlternativesPlugin(BeetsPlugin):
             raise UserError(u"Alternative collection '{0}' not found."
                             .format(e.args[0]))
 
-        beets.plugins.send('alternative_before_update', alternative=alt)
+        beets.plugins.send('alternative_before_update', alternative=alt, options=options)
         alt.update(create=options.create, query=options.query)
-        beets.plugins.send('alternative_updated', alternative=alt)
+        beets.plugins.send('alternative_updated', alternative=alt, options=options)
 
     def alternative(self, name, lib):
         conf = self.config[name]

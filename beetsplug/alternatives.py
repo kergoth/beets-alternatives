@@ -21,11 +21,11 @@ import six
 import traceback
 
 import beets
-from beets import util, art
+from beets import util, art, dbcore
 from beets.plugins import BeetsPlugin
 from beets.ui import Subcommand, get_path_formats, input_yn, UserError, \
     print_, decargs
-from beets.library import parse_query_string, Item
+from beets.library import parse_query_parts, parse_query_string, Item
 from beets.util import syspath, displayable_path, cpu_count, bytestring_path, \
         FilesystemError
 
@@ -61,7 +61,7 @@ class AlternativesPlugin(BeetsPlugin):
         except KeyError as e:
             raise UserError(u"Alternative collection '{0}' not found."
                             .format(e.args[0]))
-        alt.update(create=options.create)
+        alt.update(create=options.create, query=options.query)
 
     def list_tracks(self, lib, options):
         if options.format is not None:
@@ -108,6 +108,7 @@ class AlternativesCommand(Subcommand):
                             dest='create', const=True)
         update.add_argument('--no-create', action='store_const',
                             dest='create', const=False)
+        update.add_argument('query', nargs='*')
 
         list_tracks = subparsers.add_parser(
             'list-tracks',
@@ -240,16 +241,23 @@ class External(object):
         else:
             return (item, [self.ADD])
 
-    def items_actions(self):
-        matched_ids = set()
-        for album in self.lib.albums():
-            if self.query.match(album):
-                matched_items = album.items()
-                matched_ids.update(item.id for item in matched_items)
+    def items_actions(self, filter_query=None, action=None):
+        if action is None:
+            action = self.matched_item_action
 
-        for item in self.lib.items():
+        if filter_query is not None:
+            album_query = dbcore.AndQuery([self.query, filter_query])
+        else:
+            album_query = self.query
+
+        matched_ids = set()
+        for album in self.lib.albums(album_query):
+            matched_items = album.items()
+            matched_ids.update(item.id for item in matched_items)
+
+        for item in self.lib.items(filter_query):
             if item.id in matched_ids or self.query.match(item):
-                yield self.matched_item_action(item)
+                yield action(item)
             elif self.get_path(item):
                 yield (item, [self.REMOVE])
 
@@ -265,15 +273,18 @@ class External(object):
               .format(displayable_path(self.directory))
         return input_yn(msg, require=True)
 
-    def update(self, create=None):
+    def update(self, create=None, query=None):
         if (not os.path.isdir(syspath(self.directory))
                 and not self.ask_create(create)):
             print_(u'Skipping creation of {0}'
                    .format(displayable_path(self.directory)))
             return
 
+        if query is not None:
+            query, _ = parse_query_parts(query, Item)
+
         converter = self.converter()
-        for (item, actions) in self.items_actions():
+        for (item, actions) in self.items_actions(query):
             dest = self.destination(item)
             path = self.get_path(item)
             for action in actions:
@@ -423,8 +434,11 @@ class SymlinkView(External):
 
         return actions
 
-    def update(self, create=None):
-        for (item, actions) in self.items_actions():
+    def update(self, create=None, query=None):
+        if query is not None:
+            query, _ = parse_query_parts(query, Item)
+
+        for (item, actions) in self.items_actions(query):
             dest = self.destination(item)
             path = self.get_path(item)
             for action in actions:

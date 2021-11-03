@@ -62,9 +62,11 @@ class AlternativesPlugin(BeetsPlugin):
             raise UserError(u"Alternative collection '{0}' not found."
                             .format(e.args[0]))
 
-        beets.plugins.send('alternative_before_update', alternative=alt, options=options)
-        alt.update(create=options.create, query=options.query)
-        beets.plugins.send('alternative_updated', alternative=alt, options=options)
+        if not options.pretend:
+            beets.plugins.send('alternative_before_update', alternative=alt, options=options)
+        alt.update(create=options.create, query=options.query, pretend=options.pretend)
+        if not options.pretend:
+            beets.plugins.send('alternative_updated', alternative=alt, options=options)
 
     def list_tracks(self, lib, options):
         if options.format is not None:
@@ -111,6 +113,8 @@ class AlternativesCommand(Subcommand):
                             dest='create', const=True)
         update.add_argument('--no-create', action='store_const',
                             dest='create', const=False)
+        update.add_argument('--pretend', '-p', dest='pretend', action='store_true',
+                            help='just print the operations that would be done')
         update.add_argument('query', nargs='*')
 
         list_tracks = subparsers.add_parser(
@@ -276,12 +280,13 @@ class External(object):
               .format(displayable_path(self.directory))
         return input_yn(msg, require=True)
 
-    def update(self, create=None, query=None):
-        if (not os.path.isdir(syspath(self.directory))
-                and not self.ask_create(create)):
-            print_(u'Skipping creation of {0}'
-                   .format(displayable_path(self.directory)))
-            return
+    def update(self, create=None, query=None, pretend=False):
+        if not pretend:
+            if (not os.path.isdir(syspath(self.directory))
+                    and not self.ask_create(create)):
+                print_(u'Skipping creation of {0}'
+                    .format(displayable_path(self.directory)))
+                return
 
         if query is not None:
             query, _ = parse_query_parts(query, Item)
@@ -294,29 +299,35 @@ class External(object):
                 if action == self.MOVE:
                     print_(u'>{0} -> {1}'.format(displayable_path(path),
                                                  displayable_path(dest)))
-                    util.mkdirall(dest)
-                    util.move(path, dest)
-                    util.prune_dirs(os.path.dirname(path), root=self.directory)
-                    self.set_path(item, dest)
-                    item.store()
-                    path = dest
+                    if not pretend:
+                        util.mkdirall(dest)
+                        util.move(path, dest)
+                        util.prune_dirs(os.path.dirname(path), root=self.directory)
+                        self.set_path(item, dest)
+                        item.store()
+                        path = dest
                 elif action == self.WRITE:
                     print_(u'*{0}'.format(displayable_path(path)))
-                    item.write(path=path)
+                    if not pretend:
+                        item.write(path=path)
                 elif action == self.SYNC_ART:
                     print_(u'~{0}'.format(displayable_path(path)))
-                    self.sync_art(item, path)
+                    if not pretend:
+                        self.sync_art(item, path)
                 elif action == self.ADD:
                     print_(u'+{0}'.format(displayable_path(dest)))
-                    converter.submit(item)
+                    if not pretend:
+                        converter.submit(item)
                 elif action == self.REMOVE:
                     print_(u'-{0}'.format(displayable_path(path)))
-                    self.remove_item(item)
-                    item.store()
+                    if not pretend:
+                        self.remove_item(item)
+                        item.store()
 
-        for item, dest in converter.as_completed():
-            self.set_path(item, dest)
-            item.store()
+        if not pretend:
+            for item, dest in converter.as_completed():
+                self.set_path(item, dest)
+                item.store()
         converter.shutdown()
 
     def destination(self, item):
@@ -437,7 +448,7 @@ class SymlinkView(External):
 
         return actions
 
-    def update(self, create=None, query=None):
+    def update(self, create=None, query=None, pretend=False):
         if query is not None:
             query, _ = parse_query_parts(query, Item)
 
@@ -448,19 +459,23 @@ class SymlinkView(External):
                 if action == self.MOVE:
                     print_(u'>{0} -> {1}'.format(displayable_path(path),
                                                  displayable_path(dest)))
-                    self.remove_item(item)
-                    self.create_symlink(item)
-                    self.set_path(item, dest)
+                    if not pretend:
+                        self.remove_item(item)
+                        self.create_symlink(item)
+                        self.set_path(item, dest)
                 elif action == self.ADD:
                     print_(u'+{0}'.format(displayable_path(dest)))
-                    self.create_symlink(item)
-                    self.set_path(item, dest)
+                    if not pretend:
+                        self.create_symlink(item)
+                        self.set_path(item, dest)
                 elif action == self.REMOVE:
                     print_(u'-{0}'.format(displayable_path(path)))
-                    self.remove_item(item)
+                    if not pretend:
+                        self.remove_item(item)
                 else:
                     continue
-                item.store()
+                if not pretend:
+                    item.store()
 
     def create_symlink(self, item):
         dest = self.destination(item)

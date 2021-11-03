@@ -358,6 +358,9 @@ class SymlinkView(External):
     def parse_config(self, config):
         if 'query' not in config:
             config['query'] = u''  # This is a TrueQuery()
+
+        self.relative = config['relative_links'].get(False)
+
         super(SymlinkView, self).parse_config(config)
 
     def update(self, create=None, query=None):
@@ -387,8 +390,17 @@ class SymlinkView(External):
 
     def create_symlink(self, item):
         dest = self.destination(item)
+        path = item.path
+        if self.relative:
+            try:
+                relpath = os.path.relpath(item.path, os.path.dirname(dest))
+            except ValueError:
+                pass
+            else:
+                path = relpath
+
         util.mkdirall(dest)
-        util.link(item.path, dest)
+        util.link(path, dest)
 
 
 class Worker(futures.ThreadPoolExecutor):

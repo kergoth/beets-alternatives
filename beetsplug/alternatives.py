@@ -24,7 +24,7 @@ import confuse
 from beets import art, util
 from beets.dbcore import AndQuery
 from beets.library import Item, Library, parse_query_parts, parse_query_string
-from beets.plugins import BeetsPlugin
+from beets.plugins import BeetsPlugin, send
 from beets.ui import Subcommand, UserError, decargs, get_path_formats, input_yn, print_
 from beets.util import FilesystemError, bytestring_path, displayable_path, syspath
 from typing_extensions import Never, override
@@ -60,7 +60,9 @@ class AlternativesPlugin(BeetsPlugin):
                 raise UserError("Please specify a collection name or the --all flag")
 
             for name in self.config.keys():  # noqa: SIM118
+                send("alternative_before_update", alternative=name, options=options)
                 self.alternative(name, lib).update(create=options.create, query=options.query)
+                send("alternative_updated", alternative=name, options=options)
         else:
             try:
                 alt = self.alternative(options.name, lib)
@@ -68,7 +70,9 @@ class AlternativesPlugin(BeetsPlugin):
                 raise UserError(
                     f"Alternative collection '{e.args[0]}' not found."
                 ) from e
+            send("alternative_before_update", alternative=alt, options=options)
             alt.update(create=options.create, query=options.query)
+            send("alternative_updated", alternative=alt, options=options)
 
     def list_tracks(self, lib: Library, options: argparse.Namespace):
         alt = self.alternative(options.name, lib)

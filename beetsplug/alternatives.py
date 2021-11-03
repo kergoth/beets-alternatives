@@ -47,6 +47,14 @@ class AlternativesPlugin(BeetsPlugin):
         alt.update(create=options.create, query=options.query)
         beets.plugins.send('alternative_updated', alternative=alt, options=options)
 
+    def list(self, lib, options):
+        try:
+            alt = self.alternative(options.name, lib)
+        except KeyError as e:
+            raise UserError(u"Alternative collection '{0}' not found."
+                            .format(e.args[0]))
+        alt.list(options.query)
+
     def alternative(self, name, lib):
         conf = self.config[name]
         if not conf.exists():
@@ -70,6 +78,10 @@ class AlternativesCommand(Subcommand):
     def __init__(self, plugin):
         parser = ArgumentParser()
         subparsers = parser.add_subparsers()
+        list = subparsers.add_parser('list')
+        list.set_defaults(func=plugin.list)
+        list.add_argument('name')
+        list.add_argument('query', nargs='*')
         update = subparsers.add_parser('update')
         update.set_defaults(func=plugin.update)
         update.add_argument('name')
@@ -185,6 +197,19 @@ class External(object):
                 yield action(item)
             elif self.get_path(item):
                 yield (item, [self.REMOVE])
+
+    def list(self, query):
+        if query is not None:
+            # Only return the items we would add in an update, not those we would remove
+            query, _ = parse_query_parts(query, Item)
+            query = dbcore.AndQuery([self.query, query])
+        else:
+            query = self.query
+
+        for item, action in self.items_actions(query, action=lambda i: (i, None)):
+            if action is None:
+                dest = self.destination(item)
+                print_(displayable_path(dest))
 
     def ask_create(self, create=None):
         if not self.removable:

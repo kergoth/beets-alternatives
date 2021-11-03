@@ -42,7 +42,10 @@ class AlternativesPlugin(BeetsPlugin):
         except KeyError as e:
             raise UserError(u"Alternative collection '{0}' not found."
                             .format(e.args[0]))
+
+        beets.plugins.send('alternative_before_update', alternative=alt)
         alt.update(create=options.create)
+        beets.plugins.send('alternative_updated', alternative=alt)
 
     def alternative(self, name, lib):
         conf = self.config[name]

@@ -60,19 +60,23 @@ class AlternativesPlugin(BeetsPlugin):
                 raise UserError("Please specify a collection name or the --all flag")
 
             for name in self.config.keys():  # noqa: SIM118
-                send("alternative_before_update", alternative=name, options=options)
-                self.alternative(name, lib).update(create=options.create, query=options.query)
-                send("alternative_updated", alternative=name, options=options)
+                if not options.pretend:
+                    send("alternative_before_update", alternative=name, options=options)
+                self.alternative(name, lib, pretend=options.pretend).update(create=options.create, query=options.query)
+                if not options.pretend:
+                    send("alternative_updated", alternative=name, options=options)
         else:
             try:
-                alt = self.alternative(options.name, lib)
+                alt = self.alternative(options.name, lib, pretend=options.pretend)
             except KeyError as e:
                 raise UserError(
                     f"Alternative collection '{e.args[0]}' not found."
                 ) from e
-            send("alternative_before_update", alternative=alt, options=options)
+            if not options.pretend:
+                send("alternative_before_update", alternative=alt, options=options)
             alt.update(create=options.create, query=options.query)
-            send("alternative_updated", alternative=alt, options=options)
+            if not options.pretend:
+                send("alternative_updated", alternative=alt, options=options)
 
     def list_tracks(self, lib: Library, options: argparse.Namespace):
         alt = self.alternative(options.name, lib)
@@ -89,11 +93,12 @@ class AlternativesPlugin(BeetsPlugin):
             if alt.path_key in item:
                 print_(format(item))
 
-    def alternative(self, name: str, lib: Library):
+    def alternative(self, name: str, lib: Library, pretend: Optional[bool] = False):
         conf = self.config[name]
         if not conf.exists():
             raise KeyError(name)
 
+        conf["pretend"] = pretend
         if conf["formats"].exists():
             fmt = conf["formats"].as_str()
             assert isinstance(fmt, str)
@@ -132,6 +137,8 @@ class AlternativesCommand(Subcommand):
             default=False,
             help="Update all alternative collections that are defined in the configuration",
         )
+        update.add_argument('--pretend', '-p', dest='pretend', action='store_true',
+                            help='just print the operations that would be done')
         update.add_argument('query', nargs='*')
 
         list_tracks = subparsers.add_parser(
@@ -212,6 +219,7 @@ class External:
 
         self.removable = config.get(dict).get("removable", True)  # type: ignore
 
+        self.pretend = config.get(dict).get("pretend", False)  # type: ignore
         if "directory" in config:
             dir = config["directory"].as_str()
             assert isinstance(dir, str)
@@ -295,7 +303,7 @@ class External:
         return input_yn(msg, require=True)
 
     def update(self, create: Optional[bool] = None, query: Optional[str] = None):
-        if not os.path.isdir(syspath(self.directory)) and not self.ask_create(create):
+        if not self.pretend and not os.path.isdir(syspath(self.directory)) and not self.ask_create(create):
             print_(f"Skipping creation of {displayable_path(self.directory)}")
             return
 
@@ -307,37 +315,43 @@ class External:
                 if action == Action.MOVE:
                     assert path is not None  # action guarantees that `path` is not none
                     print_(f">{displayable_path(path)} -> {displayable_path(dest)}")
-                    util.mkdirall(dest)
-                    util.move(path, dest)
-                    util.prune_dirs(
-                        # Although the types for `prune_dirs()` require a `str`
-                        # argument the function accepts a `bytes` argument.
-                        cast(str, os.path.dirname(path)),
-                        root=self.directory,
-                    )
-                    self._set_stored_path(item, dest)
-                    item.store()
+                    if not self.pretend:
+                        util.mkdirall(dest)
+                        util.move(path, dest)
+                        util.prune_dirs(
+                            # Although the types for `prune_dirs()` require a `str`
+                            # argument the function accepts a `bytes` argument.
+                            cast(str, os.path.dirname(path)),
+                            root=self.directory,
+                        )
+                        self._set_stored_path(item, dest)
+                        item.store()
                     path = dest
                 elif action == Action.WRITE:
                     assert path is not None  # action guarantees that `path` is not none
                     print_(f"*{displayable_path(path)}")
-                    item.write(path=path)
+                    if not self.pretend:
+                        item.write(path=path)
                 elif action == Action.SYNC_ART:
                     assert path is not None  # action guarantees that `path` is not none
                     print_(f"~{displayable_path(path)}")
-                    self._sync_art(item, path)
+                    if not self.pretend:
+                        self._sync_art(item, path)
                 elif action == Action.ADD:
                     print_(f"+{displayable_path(dest)}")
-                    converter.run(item)
+                    if not self.pretend:
+                        converter.run(item)
                 elif action == Action.REMOVE:
                     assert path is not None  # action guarantees that `path` is not none
                     print_(f"-{displayable_path(path)}")
-                    self._remove_file(item)
-                    item.store()
+                    if not self.pretend:
+                        self._remove_file(item)
+                        item.store()
 
-        for item, dest in converter.as_completed():
-            self._set_stored_path(item, dest)
-            item.store()
+        if not self.pretend:
+            for item, dest in converter.as_completed():
+                self._set_stored_path(item, dest)
+                item.store()
         converter.shutdown()
 
     def destination(self, item: Item) -> bytes:
@@ -493,20 +507,24 @@ class SymlinkView(External):
                 if action == Action.MOVE:
                     assert path is not None  # action guarantees that `path` is not none
                     print_(f">{displayable_path(path)} -> {displayable_path(dest)}")
-                    self._remove_file(item)
-                    self._create_symlink(item)
-                    self._set_stored_path(item, dest)
+                    if not self.pretend:
+                        self._remove_file(item)
+                        self._create_symlink(item)
+                        self._set_stored_path(item, dest)
                 elif action == Action.ADD:
                     print_(f"+{displayable_path(dest)}")
-                    self._create_symlink(item)
-                    self._set_stored_path(item, dest)
+                    if not self.pretend:
+                        self._create_symlink(item)
+                        self._set_stored_path(item, dest)
                 elif action == Action.REMOVE:
                     assert path is not None  # action guarantees that `path` is not none
                     print_(f"-{displayable_path(path)}")
-                    self._remove_file(item)
+                    if not self.pretend:
+                        self._remove_file(item)
                 else:
                     continue
-                item.store()
+                if not self.pretend:
+                    item.store()
 
     def _create_symlink(self, item: Item):
         dest = self.destination(item)

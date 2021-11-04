@@ -80,7 +80,7 @@ class AlternativesPlugin(BeetsPlugin):
 
         # This is slow but we cannot use a native SQL query since the
         # path key is a flexible attribute
-        for item in lib.items():
+        for item in lib.items(options.query):
             if alt.path_key in item:
                 print_(format(item))
 
@@ -154,6 +154,7 @@ class AlternativesCommand(Subcommand):
             action='store_true',
             help="""Print paths for matched items.""",
         )
+        list_tracks.add_argument('query', nargs='*')
 
         super().__init__(self.name, parser, self.help)
 

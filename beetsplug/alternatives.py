@@ -256,7 +256,7 @@ class External(object):
                 album.artpath and os.path.isfile(syspath(album.artpath))):
             path = album.artpath
             dest = album.art_destination(path, dest_dir)
-            if (not os.path.isfile(dest) or
+            if (not os.path.lexists(dest) or
                     os.path.getmtime(path) > os.path.getmtime(dest)):
                 return (album, [self.COPY_ART])
         return (album, [])

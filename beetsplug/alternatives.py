@@ -15,6 +15,7 @@
 import os.path
 import threading
 import argparse
+import collections
 from concurrent import futures
 import six
 import traceback
@@ -265,6 +266,19 @@ class External(object):
             if self.query.match(album):
                 yield self.matched_album_action(album)
 
+    def albums_actions_unique_dest_dir(self, filter_query=None):
+        actions = dict(self.albums_actions(filter_query))
+        dest_dirs = {album: self.album_destination(album) for album in actions}
+        by_dest_dir = collections.defaultdict(list)
+        for album, dest_dir in dest_dirs.items():
+            by_dest_dir[dest_dir].append(album)
+
+        for album, actions in actions.items():
+            dest_dir = dest_dirs[album]
+            if not dest_dir or len(by_dest_dir[dest_dir]) > 1:
+                continue
+            yield album, actions, dest_dir
+
     def ask_create(self, create=None):
         if not self.removable:
             return True
@@ -317,7 +331,7 @@ class External(object):
             item.store()
         converter.shutdown()
 
-        for (album, actions) in self.albums_actions():
+        for album, actions, dest_dir in self.albums_actions_unique_dest_dir(query):
             for action in actions:
                 dest_dir = self.album_destination(album)
                 if action == self.COPY_ART:

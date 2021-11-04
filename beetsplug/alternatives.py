@@ -474,11 +474,11 @@ class SymlinkView(External):
                     print_(u'>{0} -> {1}'.format(displayable_path(path),
                                                  displayable_path(dest)))
                     self.remove_item(item)
-                    self.create_symlink(item)
+                    self.create_item_symlink(item)
                     self.set_path(item, dest)
                 elif action == self.ADD:
                     print_(u'+{0}'.format(displayable_path(dest)))
-                    self.create_symlink(item)
+                    self.create_item_symlink(item)
                     self.set_path(item, dest)
                 elif action == self.REMOVE:
                     print_(u'-{0}'.format(displayable_path(path)))
@@ -487,13 +487,28 @@ class SymlinkView(External):
                     continue
                 item.store()
 
-    def create_symlink(self, item):
-        dest = self.destination(item)
-        util.mkdirall(dest)
+        for album, actions, dest_dir in self.albums_actions_unique_dest_dir(query):
+            for action in actions:
+                if action == self.COPY_ART:
+                    path = album.artpath
+                    dest = album.art_destination(path, dest_dir)
+                    print_(u'$~{0}'.format(displayable_path(dest)))
+                    if self.copy_album_art_pp:
+                        util.copy(path, dest, replace=True)
+                        subprocess.call(self.copy_album_art_pp + [dest])
+                    else:
+                        self.create_symlink(path, dest)
+
+    def create_item_symlink(self, item):
+        link_path = self.destination(item)
+        return self.create_symlink(item.path, link_path)
+
+    def create_symlink(self, source_path, link_path):
+        util.mkdirall(link_path)
         link = (
-            os.path.relpath(item.path, os.path.dirname(dest))
-            if self.relativelinks == self.LINK_RELATIVE else item.path)
-        util.link(link, dest)
+            os.path.relpath(source_path, os.path.dirname(link_path))
+            if self.relativelinks == self.LINK_RELATIVE else source_path)
+        util.link(link, link_path, replace=True)
 
     def embed_art(self, item, path):
         # FIXME: symlink art

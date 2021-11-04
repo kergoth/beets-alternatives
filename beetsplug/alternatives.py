@@ -186,10 +186,7 @@ class External(object):
                 'copy_album_art',
                 self.convert_plugin.config["copy_album_art"].get(bool)
                 )
-        self.copy_album_art_pp = config.get(dict).get(
-                'copy_album_art_pp',
-                None
-                )
+        self.copy_album_art_pp = config['copy_album_art_pp'].as_str_seq()
 
         if 'directory' in config:
             dir = config['directory'].as_str()

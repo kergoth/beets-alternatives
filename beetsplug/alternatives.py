@@ -334,9 +334,9 @@ class External(object):
 
     def album_destination(self, album):
         items = album.items()
-        if len(items) > 0:
-            head, tail = os.path.split(self.destination(items[0]))
-            return head
+        item_dirs = [os.path.dirname(self.destination(item)) for item in items]
+        if all(item_dirs[0] == idir for idir in item_dirs):
+            return item_dirs[0]
         else:
             return None
 

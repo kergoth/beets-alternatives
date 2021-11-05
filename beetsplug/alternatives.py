@@ -261,23 +261,30 @@ class External(object):
                 return (album, [self.COPY_ART])
         return (album, [])
 
-    def albums_actions(self):
-        for album in self.lib.albums():
-            if self.query.match(album):
-                yield self.matched_album_action(album)
+    def albums_actions(self, items_actions):
+        seen_albums = {}
+        for item, actions in items_actions:
+            if item.album and self.REMOVE not in actions:
+                album = item._cached_album
+                if album.id not in seen_albums:
+                    seen_albums[album.id] = album
 
-    def albums_actions_unique_dest_dir(self, filter_query=None):
-        actions = dict(self.albums_actions(filter_query))
-        dest_dirs = {album: self.album_destination(album) for album in actions}
+        for album, dest_dir in self.albums_unique_dest_dir(seen_albums.values()):
+            _, actions = self.matched_album_action(album)
+            yield album, actions, dest_dir
+
+    def albums_unique_dest_dir(self, albums):
+        dest_dirs = {album: self.album_destination(album) for album in albums}
         by_dest_dir = collections.defaultdict(list)
         for album, dest_dir in dest_dirs.items():
             by_dest_dir[dest_dir].append(album)
 
-        for album, actions in actions.items():
+        for album in albums:
             dest_dir = dest_dirs[album]
             if not dest_dir or len(by_dest_dir[dest_dir]) > 1:
                 continue
-            yield album, actions, dest_dir
+            else:
+                yield album, dest_dir
 
     def ask_create(self, create=None):
         if not self.removable:
@@ -298,8 +305,9 @@ class External(object):
                    .format(displayable_path(self.directory)))
             return
 
+        items_actions = list(self.items_actions())
         converter = self.converter()
-        for (item, actions) in self.items_actions():
+        for (item, actions) in items_actions:
             dest = self.destination(item)
             path = self.get_path(item)
             for action in actions:
@@ -331,9 +339,8 @@ class External(object):
             item.store()
         converter.shutdown()
 
-        for album, actions, dest_dir in self.albums_actions_unique_dest_dir(query):
+        for album, actions, dest_dir in self.albums_actions(items_actions):
             for action in actions:
-                dest_dir = self.album_destination(album)
                 if action == self.COPY_ART:
                     path = album.artpath
                     dest = album.art_destination(path, dest_dir)
@@ -349,7 +356,7 @@ class External(object):
     def album_destination(self, album):
         items = album.items()
         item_dirs = [os.path.dirname(self.destination(item)) for item in items]
-        if all(item_dirs[0] == idir for idir in item_dirs):
+        if len(set(item_dirs)) == 1:
             return item_dirs[0]
         else:
             return None
@@ -466,7 +473,8 @@ class SymlinkView(External):
         return actions
 
     def update(self, create=None):
-        for (item, actions) in self.items_actions():
+        items_actions = list(self.items_actions())
+        for (item, actions) in items_actions:
             dest = self.destination(item)
             path = self.get_path(item)
             for action in actions:
@@ -487,7 +495,7 @@ class SymlinkView(External):
                     continue
                 item.store()
 
-        for album, actions, dest_dir in self.albums_actions_unique_dest_dir(query):
+        for album, actions, dest_dir in self.albums_actions(items_actions):
             for action in actions:
                 if action == self.COPY_ART:
                     path = album.artpath

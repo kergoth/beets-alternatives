@@ -112,6 +112,11 @@ class TestSymlinkView(TestHelper):
             "by-year": {
                 "paths": {"default": "$year/$album/$title"},
                 "formats": "link",
+            },
+            'by-year-replaced': {
+                'paths': {'default': '$year/$album/$title'},
+                'replace': {'-': '_'},
+                'formats': 'link',
             }
         }
         self.alt_config = self.config["alternatives"]["by-year"]
@@ -193,6 +198,22 @@ class TestSymlinkView(TestHelper):
         with pytest.raises(ConfigValueError):
             self.runcli("alt", "update", "by-year")
 
+    def test_add_album_replaced(self):
+        """Test the symlinks are created with replacements applied
+        * An album is added
+        * Links are created with expected replaced paths
+        """
+        self.add_album(artist="Michael Jackson", album="Thriller-Something",
+                       year="1990", original_year="1982")
+
+        self.runcli("alt", "update", "by-year-replaced")
+
+        by_year_path = self.libdir / "by-year-replaced/1990/Thriller_Something/track 1.mp3"
+        assert_symlink(
+            link=by_year_path,
+            target=self.libdir / "Michael Jackson/Thriller-Something/track 1.mp3",
+            absolute=True,
+        )
 
 class TestExternalCopy(TestHelper):
     """Test alternatives with empty ``format `` option, i.e. only copying

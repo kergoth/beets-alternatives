@@ -15,6 +15,7 @@
 import os.path
 import threading
 import argparse
+import collections
 from concurrent import futures
 import re
 import six
@@ -30,6 +31,8 @@ from beets.util import syspath, displayable_path, cpu_count, bytestring_path, \
         FilesystemError
 
 from beetsplug import convert
+
+import subprocess
 
 
 def _remove(path, soft=True):
@@ -172,13 +175,15 @@ class External(object):
     REMOVE = 2
     WRITE = 3
     MOVE = 4
-    SYNC_ART = 5
+    EMBED_ART = 5
+    COPY_ART = 6
 
     def __init__(self, log, name, lib, config):
         self._log = log
         self.name = name
         self.lib = lib
         self.path_key = u'alt.{0}'.format(name)
+        self.convert_plugin = convert.ConvertPlugin()
         self.parse_config(config)
 
     def parse_config(self, config):
@@ -191,6 +196,15 @@ class External(object):
         self.query, _ = parse_query_string(query, Item)
 
         self.removable = config.get(dict).get('removable', True)
+        self._embed = config.get(dict).get(
+                'embed',
+                self.convert_plugin.config["embed"].get(bool)
+                )
+        self.copy_album_art = config.get(dict).get(
+                'copy_album_art',
+                self.convert_plugin.config["copy_album_art"].get(bool)
+                )
+        self.copy_album_art_pp = config['copy_album_art_pp'].as_str_seq()
 
         if 'replace' in config:
             try:
@@ -231,14 +245,14 @@ class External(object):
         item_mtime_alt = os.path.getmtime(syspath(path))
         if (item_mtime_alt < os.path.getmtime(syspath(item.path))):
             actions.append(self.WRITE)
-        album = item.get_album()
 
-        if album:
+        album = item.get_album()
+        if self._embed and album:
             if (album.artpath and
                     os.path.isfile(syspath(album.artpath)) and
                     (item_mtime_alt
                      < os.path.getmtime(syspath(album.artpath)))):
-                actions.append(self.SYNC_ART)
+                actions.append(self.EMBED_ART)
 
         return actions
 
@@ -276,6 +290,44 @@ class External(object):
             elif self.get_path(item):
                 yield (item, [self.REMOVE])
 
+    def matched_album_action(self, album):
+        dest_dir = self.album_destination(album)
+        if not dest_dir:
+            return (album, [])
+        if (self.copy_album_art and
+                album.artpath and os.path.isfile(syspath(album.artpath))):
+            path = album.artpath
+            dest = album.art_destination(path, dest_dir)
+            if (not os.path.lexists(dest) or
+                    os.path.getmtime(path) > os.path.getmtime(dest)):
+                return (album, [self.COPY_ART])
+        return (album, [])
+
+    def albums_actions(self, items_actions):
+        seen_albums = {}
+        for item, actions in items_actions:
+            if item.album and self.REMOVE not in actions:
+                album = item._cached_album
+                if album.id not in seen_albums:
+                    seen_albums[album.id] = album
+
+        for album, dest_dir in self.albums_unique_dest_dir(seen_albums.values()):
+            _, actions = self.matched_album_action(album)
+            yield album, actions, dest_dir
+
+    def albums_unique_dest_dir(self, albums):
+        dest_dirs = {album: self.album_destination(album) for album in albums}
+        by_dest_dir = collections.defaultdict(list)
+        for album, dest_dir in dest_dirs.items():
+            by_dest_dir[dest_dir].append(album)
+
+        for album in albums:
+            dest_dir = dest_dirs[album]
+            if not dest_dir or len(by_dest_dir[dest_dir]) > 1:
+                continue
+            else:
+                yield album, dest_dir
+
     def ask_create(self, create=None):
         if not self.removable:
             return True
@@ -299,8 +351,9 @@ class External(object):
         if query is not None:
             query, _ = parse_query_parts(query, Item)
 
+        items_actions = list(self.items_actions(query))
         converter = self.converter()
-        for (item, actions) in self.items_actions(query):
+        for (item, actions) in items_actions:
             dest = self.destination(item)
             path = self.get_path(item)
             for action in actions:
@@ -318,10 +371,10 @@ class External(object):
                     print_(u'*{0}'.format(displayable_path(path)))
                     if not pretend:
                         item.write(path=path)
-                elif action == self.SYNC_ART:
+                elif action == self.EMBED_ART:
                     print_(u'~{0}'.format(displayable_path(path)))
                     if not pretend:
-                        self.sync_art(item, path)
+                        self.embed_art(item, path)
                 elif action == self.ADD:
                     print_(u'+{0}'.format(displayable_path(dest)))
                     if not pretend:
@@ -338,10 +391,29 @@ class External(object):
                 item.store()
         converter.shutdown()
 
+        for album, actions, dest_dir in self.albums_actions(items_actions):
+            for action in actions:
+                if action == self.COPY_ART:
+                    path = album.artpath
+                    dest = album.art_destination(path, dest_dir)
+                    print_(u'~{0}'.format(displayable_path(dest)))
+                    if not pretend:
+                        util.copy(path, dest, replace=True)
+                        if self.copy_album_art_pp:
+                            subprocess.call(self.copy_album_art_pp + [dest])
+
     def destination(self, item):
         return item.destination(basedir=self.directory,
                                 path_formats=self.path_formats,
                                 replacements=self.replacements)
+
+    def album_destination(self, album):
+        items = album.items()
+        item_dirs = [os.path.dirname(self.destination(item)) for item in items]
+        if len(set(item_dirs)) == 1:
+            return item_dirs[0]
+        else:
+            return None
 
     def set_path(self, item, path):
         item[self.path_key] = six.text_type(path, 'utf8')
@@ -370,7 +442,7 @@ class External(object):
             return item, dest
         return Worker(_convert)
 
-    def sync_art(self, item, path):
+    def embed_art(self, item, path):
         """ Embed artwork in the destination file.
         """
         album = item.get_album()
@@ -387,9 +459,7 @@ class ExternalConvert(External):
 
     def __init__(self, log, name, formats, lib, config):
         super(ExternalConvert, self).__init__(log, name, lib, config)
-        convert_plugin = convert.ConvertPlugin()
-        self._encode = convert_plugin.encode
-        self._embed = convert_plugin.config['embed'].get(bool)
+        self._encode = self.convert_plugin.encode
         formats = [f.lower() for f in formats]
         self.formats = [convert.ALIASES.get(f, f) for f in formats]
         self.convert_cmd, self.ext = convert.get_format(self.formats[0])
@@ -410,7 +480,7 @@ class ExternalConvert(External):
                 self._log.debug(u'copying {0}'.format(displayable_path(dest)))
                 util.copy(item.path, dest, replace=True)
             if self._embed:
-                self.sync_art(item, dest)
+                self.embed_art(item, dest)
             return item, dest
         return Worker(_convert)
 
@@ -460,7 +530,8 @@ class SymlinkView(External):
         if query is not None:
             query, _ = parse_query_parts(query, Item)
 
-        for (item, actions) in self.items_actions(query):
+        items_actions = list(self.items_actions(query))
+        for (item, actions) in items_actions:
             dest = self.destination(item)
             path = self.get_path(item)
             for action in actions:
@@ -469,12 +540,12 @@ class SymlinkView(External):
                                                  displayable_path(dest)))
                     if not pretend:
                         self.remove_item(item)
-                        self.create_symlink(item)
+                        self.create_item_symlink(item)
                         self.set_path(item, dest)
                 elif action == self.ADD:
                     print_(u'+{0}'.format(displayable_path(dest)))
                     if not pretend:
-                        self.create_symlink(item)
+                        self.create_item_symlink(item)
                         self.set_path(item, dest)
                 elif action == self.REMOVE:
                     print_(u'-{0}'.format(displayable_path(path)))
@@ -485,15 +556,31 @@ class SymlinkView(External):
                 if not pretend:
                     item.store()
 
-    def create_symlink(self, item):
-        dest = self.destination(item)
-        util.mkdirall(dest)
-        link = (
-            os.path.relpath(item.path, os.path.dirname(dest))
-            if self.relativelinks == self.LINK_RELATIVE else item.path)
-        util.link(link, dest)
+        for album, actions, dest_dir in self.albums_actions(items_actions):
+            for action in actions:
+                if action == self.COPY_ART:
+                    path = album.artpath
+                    dest = album.art_destination(path, dest_dir)
+                    print_(u'$~{0}'.format(displayable_path(dest)))
+                    if not pretend:
+                        if self.copy_album_art_pp:
+                            util.copy(path, dest, replace=True)
+                            subprocess.call(self.copy_album_art_pp + [dest])
+                        else:
+                            self.create_symlink(path, dest)
 
-    def sync_art(self, item, path):
+    def create_item_symlink(self, item):
+        link_path = self.destination(item)
+        return self.create_symlink(item.path, link_path)
+
+    def create_symlink(self, source_path, link_path):
+        util.mkdirall(link_path)
+        link = (
+            os.path.relpath(source_path, os.path.dirname(link_path))
+            if self.relativelinks == self.LINK_RELATIVE else source_path)
+        util.link(link, link_path, replace=True)
+
+    def embed_art(self, item, path):
         # FIXME: symlink art
         pass
 

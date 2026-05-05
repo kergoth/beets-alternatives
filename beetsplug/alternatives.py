@@ -25,7 +25,8 @@ import beets
 import beets.plugins
 import confuse
 from beets import art, util
-from beets.library import Album, Item, Library, parse_query_string
+from beets.dbcore import AndQuery
+from beets.library import Album, Item, Library, parse_query_parts, parse_query_string
 from beets.plugins import BeetsPlugin
 from beets.ui import Subcommand, UserError, get_path_formats, input_yn, print_
 from beets.util.artresizer import ArtResizer
@@ -47,7 +48,7 @@ class AlternativesPlugin(BeetsPlugin):
                 raise UserError("Please specify a collection name or the --all flag")
 
             for name in self.config.keys():  # noqa: SIM118
-                self.alternative(name, lib).update(create=options.create)
+                self.alternative(name, lib).update(create=options.create, query=options.query)
         else:
             try:
                 alt = self.alternative(options.name, lib)
@@ -55,7 +56,7 @@ class AlternativesPlugin(BeetsPlugin):
                 raise UserError(
                     f"Alternative collection '{e.args[0]}' not found."
                 ) from e
-            alt.update(create=options.create)
+            alt.update(create=options.create, query=options.query)
 
     def list_tracks(self, lib: Library, options: argparse.Namespace):
         alt = self.alternative(options.name, lib)
@@ -113,6 +114,7 @@ class AlternativesCommand(Subcommand):
             default=False,
             help="Update all alternative collections that are defined in the configuration",
         )
+        update.add_argument('query', nargs='*')
 
         list_tracks = subparsers.add_parser(
             "list-tracks",
@@ -354,14 +356,20 @@ class External:
         else:
             return [Action.ADD]
 
-    def _items_actions(self) -> Iterator[tuple[Item, Sequence[Action]]]:
-        matched_ids = set()
-        for album in self.lib.albums():
-            if self._config.query.match(album):
-                matched_items = album.items()
-                matched_ids.update(item.id for item in matched_items)
+    def _items_actions(self, query: list[str] | None = None) -> Iterator[tuple[Item, Sequence[Action]]]:
+        if query:
+            filter_query, _ = parse_query_parts(query, Item)
+            album_query = AndQuery([self._config.query, filter_query])
+        else:
+            filter_query = None
+            album_query = self._config.query
 
-        for item in self.lib.items():
+        matched_ids = set()
+        for album in self.lib.albums(album_query):
+            matched_items = album.items()
+            matched_ids.update(item.id for item in matched_items)
+
+        for item in self.lib.items(filter_query):
             if item.id in matched_ids or self._config.query.match(item):
                 yield (item, self._matched_item_action(item))
             elif self._get_stored_path(item):
@@ -380,7 +388,7 @@ class External:
         )
         return input_yn(msg, require=True)
 
-    def update(self, create: bool | None = None):  # noqa: C901
+    def update(self, create: bool | None = None, query: list[str] | None = None):  # noqa: C901
         if not self._config.directory.is_dir() and not self.ask_create(create):
             print_(f"Skipping creation of {self._config.directory}")
             return
@@ -401,7 +409,7 @@ class External:
 
         converter, converting_done = self._converter()
         with converter as converter:
-            for item, actions in self._items_actions():
+            for item, actions in self._items_actions(query):
                 dest = self.destination(item)
                 path = self._get_stored_path(item)
                 for action in actions:
@@ -668,8 +676,8 @@ class SymlinkView(External):
             return [Action.MOVE]
 
     @override
-    def update(self, create: bool | None = None):
-        for item, actions in self._items_actions():
+    def update(self, create: bool | None = None, query: list[str] | None = None):
+        for item, actions in self._items_actions(query):
             dest = self.destination(item)
             path = self._get_stored_path(item)
             for action in actions:

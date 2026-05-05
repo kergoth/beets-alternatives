@@ -58,10 +58,12 @@ class AlternativesPlugin(BeetsPlugin):
             alt.update(create=options.create)
 
     def list_tracks(self, lib: Library, options: argparse.Namespace):
+        alt = self.alternative(options.name, lib)
         if options.format is not None:
             beets.config[Item._format_config_key].set(options.format)  # pyright: ignore[reportPrivateUsage]
-
-        alt = self.alternative(options.name, lib)
+        elif options.path:
+            fmt = f"${{{alt.path_key}}}"
+            beets.config[Item._format_config_key].set(fmt)  # pyright: ignore[reportPrivateUsage]
 
         # This is slow but we cannot use a native SQL query since the
         # path key is a flexible attribute
@@ -131,6 +133,12 @@ class AlternativesCommand(Subcommand):
             dest="format",
             help="""Format string to print for each track. See beets’
                 Path Formats for more information.""",
+        )
+        list_tracks.add_argument(
+            ‘-p’,
+            ‘--path’,
+            action=’store_true’,
+            help="""Print paths for matched items.""",
         )
 
         super().__init__(self.name, parser, self.help)

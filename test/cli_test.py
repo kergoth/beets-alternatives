@@ -13,6 +13,7 @@ from PIL import Image
 from .helper import (
     TestHelper,
     assert_file_tag,
+    assert_hardlink,
     assert_has_embedded_artwork,
     assert_has_not_embedded_artwork,
     assert_is_not_file,
@@ -215,6 +216,108 @@ class TestSymlinkView(TestHelper):
         # Symlink is created
         assert album.artpath
         assert_symlink(external_art_path, Path(str(album.artpath, "utf8")))
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="no hard links on windows")
+class TestHardlinkView(TestHelper):
+    """Test alternatives with ``formats: link`` and ``link_type: hardlink``."""
+
+    @pytest.fixture(autouse=True)
+    def _hardlink_view(self, _setup: None):
+        self.lib.path_formats = (("default", "$artist/$album/$title"),)
+        self.config["paths"] = {"default": "$artist/$album/$title"}
+        self.config["alternatives"] = {
+            "by-year": {
+                "paths": {"default": "$year/$album/$title"},
+                "formats": "link",
+                "link_type": "hardlink",
+            },
+        }
+        self.alt_config = self.config["alternatives"]["by-year"]
+
+    def test_add_move_remove_album(self, event_log: Path):
+        """Hard links are created, moved and removed correctly."""
+        self.add_album(
+            artist="Michael Jackson",
+            album="Thriller",
+            year="1990",
+            original_year="1982",
+        )
+
+        # Hard link is created
+        self.runcli("alt", "update", "by-year")
+        alt_path_1 = self.libdir / "by-year/1990/Thriller/track 1.mp3"
+        library_path = self.libdir / "Michael Jackson/Thriller/track 1.mp3"
+        assert_hardlink(alt_path_1, library_path)
+
+        # Alternative is not updated again when nothing changed
+        assert self.runcli("alt", "update", "by-year") == ""
+
+        # Hard link location is updated when path config changes
+        self.alt_config["paths"]["default"] = "$original_year/$album/$title"
+        self.runcli("alt", "update", "by-year")
+        alt_path_2 = self.libdir / "by-year/1982/Thriller/track 1.mp3"
+        assert_hardlink(alt_path_2, library_path)
+
+        # Hard link is removed when query excludes the item
+        self.alt_config["query"] = "some_field::foobar"
+        self.runcli("alt", "update", "by-year")
+        assert_is_not_file(alt_path_2)
+
+        assert event_log.read_text().split("\n") == [
+            f"by-year, ADD, {alt_path_1}, track 1",
+            f"by-year, MOVE, {alt_path_2}, track 1",
+            f"by-year, REMOVE, {alt_path_2}, track 1",
+            "",
+        ]
+
+    def test_album_art_hardlinked(self):
+        """Album art is hard-linked when album_art_copy is set."""
+        self.alt_config["album_art_copy"] = True
+        self.config["art_filename"] = "COVER"
+        album = self.add_album(
+            artist="Michael Jackson",
+            album="Thriller",
+            year="1990",
+            original_year="1982",
+        )
+        album.set_art(self.IMAGE_FIXTURE1)
+        album.store()
+        self.runcli("alt", "update", "by-year")
+
+        external_album_path = self.libdir / "by-year" / "1990" / "Thriller"
+        external_art_path = external_album_path / "COVER.png"
+
+        assert album.artpath
+        assert_hardlink(external_art_path, Path(str(album.artpath, "utf8")))
+
+    def test_album_art_format_ignored_in_hardlink_mode(self):
+        """album_art_format is ignored for hardlinks (can't convert a link)."""
+        self.alt_config["album_art_copy"] = True
+        self.alt_config["album_art_format"] = "jpg"
+        self.config["art_filename"] = "COVER"
+        album = self.add_album(
+            artist="Michael Jackson",
+            album="Thriller",
+            year="1990",
+            original_year="1982",
+        )
+        album.set_art(self.IMAGE_FIXTURE1)
+        album.store()
+        self.runcli("alt", "update", "by-year")
+
+        external_album_path = self.libdir / "by-year" / "1990" / "Thriller"
+        # Extension stays .png — album_art_format does not apply to hardlinks
+        external_art_path = external_album_path / "COVER.png"
+
+        assert album.artpath
+        assert_hardlink(external_art_path, Path(str(album.artpath, "utf8")))
+
+    def test_invalid_link_type(self):
+        """An unrecognised link_type value raises ConfigValueError."""
+        self.alt_config["link_type"] = "Hylian"
+        with pytest.raises(ConfigValueError):
+            self.runcli("alt", "update", "by-year")
 
 
 class TestExternalCopy(TestHelper):

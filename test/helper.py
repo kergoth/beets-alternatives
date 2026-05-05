@@ -92,6 +92,12 @@ def assert_symlink(link: Path, target: Path, absolute: bool = True):
     assert link.readlink().is_absolute() == absolute
 
 
+def assert_hardlink(link: Path, target: Path):
+    assert link.is_file()
+    assert not link.is_symlink()
+    assert link.stat().st_ino == target.stat().st_ino
+
+
 def assert_has_embedded_artwork(path: Path, compare_file: Path | None = None):
     mediafile = MediaFile(path)
     assert mediafile.art is not None, "MediaFile has no embedded artwork"

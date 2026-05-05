@@ -179,6 +179,20 @@ symlinks. E.g:
 Now, if you move the `/music/` folder to another location, the links
 will continue working
 
+You can also use `link_type: hardlink` to create hard links. Hard links are
+indistinguishable from regular files in directory listings and work without
+a working symlink implementation, but they cannot span filesystems.
+
+```yaml
+alternatives:
+  by-year:
+    directory: by-year
+    paths:
+      default: $year/$album/$title
+    formats: link
+    link_type: hardlink
+```
+
 CLI Reference
 -------------
 
@@ -262,9 +276,12 @@ following settings.
   not exist, the `update` command will ask you to confirm the creation
   of the external collection. (optional)
 
-* **`link_type`** Can be `absolute` (default) or `relative`. If
-  **`formats`** is `link`, it sets the type of links to create. For
-  differences between link types and examples see [Symlink Views](#symlink-views).
+* **`link_type`** Can be `absolute` (default), `relative`, or `hardlink`. If
+  **`formats`** is `link`, it sets the type of links to create. Use `hardlink`
+  to create hard links instead of symbolic links — useful when the source and
+  destination are on the same filesystem and you want directory listings that
+  show real files. For differences between symlink types and examples see
+  [Symlink Views](#symlink-views). Note that hard links cannot span filesystems.
 
 * **`album_art_embed`** Embed album art into the media file. Default `yes`
 

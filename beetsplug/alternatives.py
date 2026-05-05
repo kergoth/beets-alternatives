@@ -193,6 +193,9 @@ class Config:
     album_art_quality: int
     """JPEG Quality for album art if it is resized. Default: 0"""
 
+    link_type: "LinkType"
+    """Type of link to create for items in the collection"""
+
     def __init__(self, collection_id: str, config: confuse.ConfigView, lib: Library):
         self.collection_id = collection_id
 
@@ -269,13 +272,14 @@ class Config:
         link_type = config["link_type"].get(
             confuse.Choice(
                 {
-                    "relative": SymlinkType.RELATIVE,
-                    "absolute": SymlinkType.ABSOLUTE,
+                    "relative": LinkType.RELATIVE,
+                    "absolute": LinkType.ABSOLUTE,
+                    "hardlink": LinkType.HARDLINK,
                 },
-                default=SymlinkType.ABSOLUTE,
+                default=LinkType.ABSOLUTE,
             )
         )
-        assert isinstance(link_type, SymlinkType)
+        assert isinstance(link_type, LinkType)
         self.link_type = link_type
 
 
@@ -461,7 +465,7 @@ class External:
             if self._config.album_art_copy:
                 self.update_art()
 
-    def update_art(self, link: bool = False):
+    def update_art(self, link: bool = False, hardlink: bool = False):
         for album in self.lib.albums():
             if not self._config.query.match(album) and not any(
                 self._config.query.match(item) for item in album.items()
@@ -479,7 +483,7 @@ class External:
             dest = album.art_destination(album.artpath, bytes(dest_dir))
             dest = Path(str(dest, "utf8"))
 
-            if self._config.album_art_format and not link:
+            if self._config.album_art_format and not link and not hardlink:
                 new_format = self._config.album_art_format.lower()
                 if new_format == "jpeg":
                     new_format = "jpg"
@@ -491,7 +495,12 @@ class External:
 
             artpath = bytes(artpath)
 
-            if link:
+            if hardlink:
+                self._log.debug(f"Hard-linking art from {album.artpath} to {dest}")
+                # hardlink_to() cannot replace an existing file; unlink first.
+                dest.unlink(missing_ok=True)
+                util.hardlink(artpath, bytes(dest))
+            elif link:
                 self._log.debug(f"Linking art from {album.artpath} to {dest}")
                 util.link(artpath, bytes(dest), replace=True)
             else:
@@ -635,9 +644,10 @@ class ExternalConvert(External):
         return item.format.lower() not in self._formats
 
 
-class SymlinkType(Enum):
+class LinkType(Enum):
     ABSOLUTE = 0
     RELATIVE = 1
+    HARDLINK = 2
 
 
 class SymlinkView(External):
@@ -668,12 +678,12 @@ class SymlinkView(External):
                     assert path is not None  # action guarantees that `path` is not none
                     print_(f">{path} -> {dest}")
                     self._remove_file(item)
-                    self._create_symlink(item)
+                    self._create_link(item)
                     self._set_stored_path(item, dest)
                     item.store()
                 elif action == Action.ADD:
                     print_(f"+{dest}")
-                    self._create_symlink(item)
+                    self._create_link(item)
                     self._set_stored_path(item, dest)
                     item.store()
                 elif action == Action.REMOVE:
@@ -690,18 +700,25 @@ class SymlinkView(External):
                 )
 
         if self._config.album_art_copy:
-            self.update_art(link=True)
+            self.update_art(
+                link=self._config.link_type != LinkType.HARDLINK,
+                hardlink=self._config.link_type == LinkType.HARDLINK,
+            )
 
-    def _create_symlink(self, item: Item):
+    def _create_link(self, item: Item):
         dest = self.destination(item)
         dest.parent.mkdir(exist_ok=True, parents=True)
         item_path = Path(str(item.path, "utf8"))
-        link = (
-            os.path.relpath(item_path, dest.parent)
-            if self._config.link_type == SymlinkType.RELATIVE
-            else item_path
-        )
-        dest.symlink_to(link)
+        if self._config.link_type == LinkType.HARDLINK:
+            dest.unlink(missing_ok=True)
+            util.hardlink(bytes(item_path), bytes(dest))
+        else:
+            link = (
+                os.path.relpath(item_path, dest.parent)
+                if self._config.link_type == LinkType.RELATIVE
+                else item_path
+            )
+            dest.symlink_to(link)
 
     @override
     def _sync_art(self, item: Item, path: Path):

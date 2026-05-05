@@ -27,7 +27,7 @@ import confuse
 from beets import art, util
 from beets.dbcore import AndQuery
 from beets.library import Album, Item, Library, parse_query_parts, parse_query_string
-from beets.plugins import BeetsPlugin
+from beets.plugins import BeetsPlugin, send
 from beets.ui import Subcommand, UserError, get_path_formats, input_yn, print_
 from beets.util.artresizer import ArtResizer
 from typing_extensions import Never, override
@@ -48,7 +48,11 @@ class AlternativesPlugin(BeetsPlugin):
                 raise UserError("Please specify a collection name or the --all flag")
 
             for name in self.config.keys():  # noqa: SIM118
+                if not options.pretend:
+                    send("alternatives.update_begin", alternative=name, options=options)
                 self.alternative(name, lib).update(create=options.create, query=options.query, pretend=options.pretend)
+                if not options.pretend:
+                    send("alternatives.updated", alternative=name, options=options)
         else:
             try:
                 alt = self.alternative(options.name, lib)
@@ -56,7 +60,11 @@ class AlternativesPlugin(BeetsPlugin):
                 raise UserError(
                     f"Alternative collection '{e.args[0]}' not found."
                 ) from e
+            if not options.pretend:
+                send("alternatives.update_begin", alternative=alt, options=options)
             alt.update(create=options.create, query=options.query, pretend=options.pretend)
+            if not options.pretend:
+                send("alternatives.updated", alternative=alt, options=options)
 
     def list_tracks(self, lib: Library, options: argparse.Namespace):
         alt = self.alternative(options.name, lib)

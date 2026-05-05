@@ -48,7 +48,7 @@ class AlternativesPlugin(BeetsPlugin):
                 raise UserError("Please specify a collection name or the --all flag")
 
             for name in self.config.keys():  # noqa: SIM118
-                self.alternative(name, lib).update(create=options.create, query=options.query)
+                self.alternative(name, lib).update(create=options.create, query=options.query, pretend=options.pretend)
         else:
             try:
                 alt = self.alternative(options.name, lib)
@@ -56,7 +56,7 @@ class AlternativesPlugin(BeetsPlugin):
                 raise UserError(
                     f"Alternative collection '{e.args[0]}' not found."
                 ) from e
-            alt.update(create=options.create, query=options.query)
+            alt.update(create=options.create, query=options.query, pretend=options.pretend)
 
     def list_tracks(self, lib: Library, options: argparse.Namespace):
         alt = self.alternative(options.name, lib)
@@ -114,6 +114,8 @@ class AlternativesCommand(Subcommand):
             default=False,
             help="Update all alternative collections that are defined in the configuration",
         )
+        update.add_argument('--pretend', '-p', action='store_true',
+                            help='just print the operations that would be done')
         update.add_argument('query', nargs='*')
 
         list_tracks = subparsers.add_parser(
@@ -137,12 +139,12 @@ class AlternativesCommand(Subcommand):
                 Path Formats for more information.""",
         )
         list_tracks.add_argument(
-            ‘-p’,
-            ‘--path’,
-            action=’store_true’,
+            '-p',
+            '--path',
+            action='store_true',
             help="""Print paths for matched items.""",
         )
-        list_tracks.add_argument(‘query’, nargs=’*’)
+        list_tracks.add_argument('query', nargs='*')
 
         super().__init__(self.name, parser, self.help)
 
@@ -388,8 +390,8 @@ class External:
         )
         return input_yn(msg, require=True)
 
-    def update(self, create: bool | None = None, query: list[str] | None = None):  # noqa: C901
-        if not self._config.directory.is_dir() and not self.ask_create(create):
+    def update(self, create: bool | None = None, query: list[str] | None = None, pretend: bool = False):  # noqa: C901
+        if not pretend and not self._config.directory.is_dir() and not self.ask_create(create):
             print_(f"Skipping creation of {self._config.directory}")
             return
 
@@ -419,48 +421,53 @@ class External:
                             path is not None
                         )  # action guarantees that `path` is not none
                         print_(f">{path} -> {dest}")
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        path.rename(dest)
-                        # beets types are confusing
-                        util.prune_dirs(
-                            str(path.parent), root=str(self._config.directory)
-                        )  # pyright: ignore
-                        self._set_stored_path(item, dest)
-                        item.store()
-                        path = dest
+                        if not pretend:
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            path.rename(dest)
+                            # beets types are confusing
+                            util.prune_dirs(
+                                str(path.parent), root=str(self._config.directory)
+                            )  # pyright: ignore
+                            self._set_stored_path(item, dest)
+                            item.store()
+                            path = dest
                     elif action == Action.WRITE:
                         assert (
                             path is not None
                         )  # action guarantees that `path` is not none
                         print_(f"*{path}")
-                        item.write(path=bytes(path))
+                        if not pretend:
+                            item.write(path=bytes(path))
                     elif action == Action.SYNC_ART:
                         print_(f"~{path}")
                         assert path is not None
-                        self._sync_art(item, path)
+                        if not pretend:
+                            self._sync_art(item, path)
                     elif action == Action.ADD:
                         print_(f"+{dest}")
-                        dest.parent.mkdir(exist_ok=True, parents=True)
-                        if self._should_transcode(item):
-                            delay_finalize = True
-                            converter.run(item, dest)
-                        else:
-                            self._log.debug(f"copying {dest}")
-                            shutil.copyfile(item.path, dest)
-                            if self._config.album_art_embed:
-                                self._sync_art(item, dest)
-                            self._set_stored_path(item, dest)
-                            item.store()
+                        if not pretend:
+                            dest.parent.mkdir(exist_ok=True, parents=True)
+                            if self._should_transcode(item):
+                                delay_finalize = True
+                                converter.run(item, dest)
+                            else:
+                                self._log.debug(f"copying {dest}")
+                                shutil.copyfile(item.path, dest)
+                                if self._config.album_art_embed:
+                                    self._sync_art(item, dest)
+                                self._set_stored_path(item, dest)
+                                item.store()
 
                     elif action == Action.REMOVE:
                         assert (
                             path is not None
                         )  # action guarantees that `path` is not none
                         print_(f"-{path}")
-                        self._remove_file(item)
-                        item.store()
+                        if not pretend:
+                            self._remove_file(item)
+                            item.store()
 
-                    if not delay_finalize:
+                    if not pretend and not delay_finalize:
                         _send_item_updated(
                             collection=self._config.collection_id,
                             path=dest,
@@ -468,14 +475,16 @@ class External:
                             action=action,
                         )
 
-                for item, dest in _get_queue_available(converting_done):
-                    finalize_converted_item(item, dest)
+                if not pretend:
+                    for item, dest in _get_queue_available(converting_done):
+                        finalize_converted_item(item, dest)
 
-            for item, dest in converter.as_completed():
-                for item, dest in _get_queue_available(converting_done):
-                    finalize_converted_item(item, dest)
+            if not pretend:
+                for item, dest in converter.as_completed():
+                    for item, dest in _get_queue_available(converting_done):
+                        finalize_converted_item(item, dest)
 
-            if self._config.album_art_copy:
+            if not pretend and self._config.album_art_copy:
                 self.update_art()
 
     def update_art(self, link: bool = False):
@@ -676,7 +685,7 @@ class SymlinkView(External):
             return [Action.MOVE]
 
     @override
-    def update(self, create: bool | None = None, query: list[str] | None = None):
+    def update(self, create: bool | None = None, query: list[str] | None = None, pretend: bool = False):
         for item, actions in self._items_actions(query):
             dest = self.destination(item)
             path = self._get_stored_path(item)
@@ -684,29 +693,35 @@ class SymlinkView(External):
                 if action == Action.MOVE:
                     assert path is not None  # action guarantees that `path` is not none
                     print_(f">{path} -> {dest}")
-                    self._remove_file(item)
-                    self._create_symlink(item)
-                    self._set_stored_path(item, dest)
-                    item.store()
+                    if not pretend:
+                        self._remove_file(item)
+                        self._create_symlink(item)
+                        self._set_stored_path(item, dest)
+                        item.store()
                 elif action == Action.ADD:
                     print_(f"+{dest}")
-                    self._create_symlink(item)
-                    self._set_stored_path(item, dest)
-                    item.store()
+                    if not pretend:
+                        self._create_symlink(item)
+                        self._set_stored_path(item, dest)
+                        item.store()
                 elif action == Action.REMOVE:
                     assert path is not None  # action guarantees that `path` is not none
                     print_(f"-{path}")
-                    self._remove_file(item)
-                    item.store()
+                    if not pretend:
+                        self._remove_file(item)
+                        item.store()
+                else:
+                    continue
 
-                _send_item_updated(
-                    collection=self._config.collection_id,
-                    path=dest,
-                    item=item,
-                    action=action,
-                )
+                if not pretend:
+                    _send_item_updated(
+                        collection=self._config.collection_id,
+                        path=dest,
+                        item=item,
+                        action=action,
+                    )
 
-        if self._config.album_art_copy:
+        if not pretend and self._config.album_art_copy:
             self.update_art(link=True)
 
     def _create_symlink(self, item: Item):

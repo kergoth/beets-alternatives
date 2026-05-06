@@ -77,7 +77,7 @@ class AlternativesPlugin(BeetsPlugin):
         config = Config(name, config_raw, lib)
 
         if config.type == "link":
-            return SymlinkView(self._log, lib, config)
+            return LinkView(self._log, lib, config)
         elif config.formats:
             return ExternalConvert(self._log, lib, config)
         else:
@@ -650,7 +650,7 @@ class LinkType(Enum):
     HARDLINK = 2
 
 
-class SymlinkView(External):
+class LinkView(External):
     @override
     def item_change_actions(
         self, item: Item, actual: Path, dest: Path
@@ -661,7 +661,7 @@ class SymlinkView(External):
 
         if (
             actual == dest
-            and actual.is_file()  # Symlink not broken, `.samefile()` doesn’t throw
+            and actual.is_file()  # Existing link not broken, `.samefile()` doesn’t throw
             and actual.samefile(Path(str(item.path, "utf8")))
         ):
             return []

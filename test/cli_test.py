@@ -99,11 +99,11 @@ class TestDoc(TestHelper):
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="no symlinks on windows")
-class TestSymlinkView(TestHelper):
-    """Test alternatives with the ``link`` format producing symbolic links."""
+class TestLinkView(TestHelper):
+    """Test alternatives with the ``link`` format producing links."""
 
     @pytest.fixture(autouse=True)
-    def _symlink_view(self):
+    def _link_view(self, _setup: None):
         self.lib.path_formats = (("default", "$artist/$album/$title"),)
         self.config["paths"] = {"default": "$artist/$album/$title"}
         self.config["alternatives"] = {

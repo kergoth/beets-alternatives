@@ -119,7 +119,7 @@ beet alt update myplayer
 
 This removes all Bach tracks from the player and adds Beethoven’s.
 
-### Symlink Views
+### Link Views
 
 Instead of copying and converting files this plugin can also create
 symbolic links to the files in your library. For example you want to
@@ -139,15 +139,15 @@ alternatives:
 ```
 
 The first thing to note here is the `link` format. Instead of
-converting the files this tells the plugin to create symbolic links to
-the original audio file.  We also note that the directory is a relative
+converting the files this tells the plugin to create links to the
+original audio file. We also note that the directory is a relative
 path: it will be resolved with respect to the global `directory`
 option. We could also omit the directory configuration as it defaults
 to the collection’s name. Finally, we omitted the `query` option. This
-means that we want to create symlinks for all files. Of course you can
+means that we want to create links for all files. Of course you can
 still add a query to select only parts of your collection.
 
-The `beet alt update by-year` command will now create the symlinks. For
+The `beet alt update by-year` command will now create the links. For
 example
 
 ```plain
@@ -155,7 +155,7 @@ example
 -> /music/Michael Jackson/Thriller/Beat It.mp3
 ```
 
-You can also specify if you want absolute symlinks (default) or relative ones
+You can also specify if you want absolute links (default) or relative ones
 with `link_type`. The option `link_type` must be `absolute` or `relative`
 
 ```yaml
@@ -169,7 +169,7 @@ alternatives:
 ```
 
 With this config, the `beet alt update by-year` command will create relative
-symlinks. E.g:
+links. E.g:
 
 ```plain
 /music/by-year/1982/Thriller/Beat It.mp3
@@ -278,10 +278,10 @@ following settings.
 
 * **`link_type`** Can be `absolute` (default), `relative`, or `hardlink`. If
   **`formats`** is `link`, it sets the type of links to create. Use `hardlink`
-  to create hard links instead of symbolic links — useful when the source and
+  to create hard links instead of symbolic links. This is useful when the source and
   destination are on the same filesystem and you want directory listings that
-  show real files. For differences between symlink types and examples see
-  [Symlink Views](#symlink-views). Note that hard links cannot span filesystems.
+  show real files. For differences between link types and examples see
+  [Link Views](#link-views). Note that hard links cannot span filesystems.
 
 * **`album_art_embed`** Embed album art into the media file. Default `yes`
 
